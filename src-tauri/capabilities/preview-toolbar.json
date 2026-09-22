@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview-toolbar",
+  "description": "Limited local IPC for the Preview Workbench toolbar child webview",
+  "webviews": ["previewbar-*"],
+  "local": true,
+  "permissions": [
+    "preview-workbench:allow-relay",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

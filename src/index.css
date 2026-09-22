@@ -1,0 +1,300 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Chromatic Discipline — 색 토큰 CSS 변수. 기본(:root)=라이트, .dark=다크.
+ *
+ * 여기 값은 **스크립트 실행 전 폴백**이다. 실제 테마는 themes.ts가 첫 프레임 전에
+ * 인라인 스타일로 덮어쓴다(다중 테마 — Catppuccin/Nord/…). 두 곳의 값이 어긋나도
+ * 인라인이 이기므로 화면은 항상 themes.ts를 따른다.
+ */
+:root {
+  /* 커스텀 스타일이 닿지 않는 네이티브 UI(스크롤바 폴백·폼 컨트롤)가 테마를 따르게 한다 */
+  color-scheme: light;
+  --c-bg: #ffffff;
+  --c-surface: #f7f7f8;
+  --c-raised: #ffffff;
+  --c-border: #e4e4e7;
+  --c-border-strong: #d4d4d8;
+  --c-primary: #14b8a6;
+  --c-primary-bright: #2dd4bf;
+  --c-primary-hover: #0d9488;
+  /* 차트 계열 — 액센트 명도 계조의 파생. 두 번째 유채색은 두지 않는다 (DESIGN.md) */
+  --c-series-1: var(--c-primary-bright);
+  --c-series-2: var(--c-primary-hover);
+  --c-series-3: color-mix(in srgb, var(--c-primary-bright) 45%, var(--c-bg));
+  --c-series-4: color-mix(in srgb, var(--c-primary-hover) 60%, black);
+  /* 채도 높은 액센트 면 위의 텍스트 — 테마 무관 */
+  --c-on-accent: #f4f4f5;
+  --c-scrollbar-track: transparent;
+  --c-scrollbar-thumb: rgba(24, 24, 27, 0.25);
+  --c-scrollbar-thumb-hover: rgba(24, 24, 27, 0.4);
+  --c-scrollbar-thumb-active: rgba(24, 24, 27, 0.55);
+  --c-text: #18181b;
+  --c-text-2: #52525b;
+  --c-text-muted: #a1a1aa;
+  /* 범주형 식별색 — 위키 그래프의 폴더 구분 전용이다. 상태·인터랙션 의미로 쓰지 않는다.
+     --c-series-*(차트 계열)와 다른 이름인 이유는, 저쪽은 액센트 명도 계조라 이웃한 두 계열만
+     구분하면 되지만 노드-링크 그래프는 임의의 두 노드가 나란히 놓여 전체쌍(all-pairs) 기준을
+     지켜야 하기 때문이다. 세 슬롯뿐인 것도 그 기준의 결과다 — 네 번째 색부터는 라이트/다크
+     어느 한쪽에서 정상 시각 분리 기준(ΔE 15)을 넘기지 못한다. 넘치는 폴더는 기타로 접는다. */
+  --c-cat-1: #2a78d6;
+  --c-cat-2: #eb6834;
+  --c-cat-3: #1baf7a;
+  /* status — 라이트: 흰 배경 대비 위해 600 톤(어둡게) */
+  --c-running: #2563eb;
+  --c-awaiting: #d97706;
+  --c-question: #9333ea;
+  --c-done: #16a34a;
+  --c-failed: #dc2626;
+  /* diff/danger 틴트 — 라이트: 옅은 100 톤 */
+  --c-addbg: #dcfce7;
+  --c-delbg: #fee2e2;
+  /* 줄 틴트 위에 겹치는 단어 단위 강조 — diff 본문 전용 2단계 톤 */
+  --c-addbg-strong: #86efac;
+  --c-delbg-strong: #fca5a5;
+  --c-dangerbg: #fef2f2;
+  --c-dangerborder: #fca5a5;
+  --c-empty: #f1f1f2;
+  /* 파일 타입 틴트 — 보조 채널 전용(DESIGN.md Colors). 상태·인터랙션 의미 금지. */
+  /* 파일 트리 치수 — 여기 값은 **설정을 읽기 전의 기본값**이다.
+     실제 값은 설정(에디터 탭)에서 오고, 글자 크기 하나로부터 나머지 넷을 파생한다
+     (`lib/editor-settings.ts`의 `treeMetrics`). 글자만 키우면 행 높이가 그대로라
+     디센더(g·y·p)가 잘리므로 다섯이 한 벌로 움직여야 한다.
+     14px(원래) → 18px(너무 큼) → 16px → 이제 사용자가 정한다. 행 높이는 글자의 1.44배이고,
+     비율이 아니라 정수 px로 확정해 내려 준다 — 소수 px는 행마다 반올림이 갈려 줄 간격이
+     들쭉날쭉해진다.
+     아이콘·chevron도 이제 이 변수를 **실제로 읽는다**(아래 svg 규칙). 전에는 SVG가 숫자
+     prop만 받아 `FileTree.tsx`의 `size={…}`가 별도의 진실이었고, 실제로 갈라져 있었다 —
+     변수는 chevron 15px인데 넘기는 값은 14였다. */
+  --file-tree-font-size: 16px;
+  --file-tree-line-height: 23px;
+  --file-tree-icon: 16px;
+  --file-tree-chevron: 15px;
+  --file-tree-indent: 14px;
+
+  --ft-folder: #8a6d2f;
+  --ft-code: #6d5fb8;
+  --ft-doc: #4f6d94;
+  --ft-style: #a05578;
+  --ft-data: #5f7a48;
+}
+
+.dark {
+  color-scheme: dark;
+  --c-bg: #0d0d0d;
+  --c-surface: #161616;
+  --c-raised: #1f1f1f;
+  --c-border: #2a2a2a;
+  --c-border-strong: #3f3f46;
+  --c-primary: #14b8a6;
+  --c-primary-bright: #2dd4bf;
+  --c-primary-hover: #0d9488;
+  --c-scrollbar-track: transparent;
+  --c-scrollbar-thumb: rgba(161, 161, 170, 0.3);
+  --c-scrollbar-thumb-hover: rgba(161, 161, 170, 0.5);
+  --c-scrollbar-thumb-active: rgba(161, 161, 170, 0.65);
+  --c-text: #f4f4f5;
+  --c-text-2: #a1a1aa;
+  --c-text-muted: #71717a;
+  /* 범주형 식별색 — 다크 표면(#0d0d0d)에 맞춰 다시 고른 같은 세 색상이다.
+     라이트 값을 그대로 쓰면 명도 밴드를 벗어난다. 자동 반전이 아니라 별도 선택이다. */
+  --c-cat-1: #3987e5;
+  --c-cat-2: #d95926;
+  --c-cat-3: #199e70;
+  /* status — 다크: 기존 밝은 400 톤 */
+  --c-running: #60a5fa;
+  --c-awaiting: #fbbf24;
+  --c-question: #c084fc;
+  --c-done: #4ade80;
+  --c-failed: #f87171;
+  /* diff/danger 틴트 — 다크: 어두운 틴트 */
+  --c-addbg: #071a0f;
+  --c-delbg: #1a0a0a;
+  /* 줄 틴트 위에 겹치는 단어 단위 강조 — diff 본문 전용 2단계 톤 */
+  --c-addbg-strong: #14532d;
+  --c-delbg-strong: #7f1d1d;
+  --c-dangerbg: #1a0a0a;
+  --c-dangerborder: #b91c1c;
+  --c-empty: #161616;
+  /* 파일 타입 틴트 — 보조 채널 전용(DESIGN.md Colors). 상태·인터랙션 의미 금지. */
+  --ft-folder: #c9a86a;
+  --ft-code: #a094d4;
+  --ft-doc: #7f9bbd;
+  --ft-style: #c98ba6;
+  --ft-data: #8fa878;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* 폰트 스택 — 기본값은 기존 하드코딩 체인과 동일(미설정 시 픽셀 단위 동일 불변식). 런타임 갱신은 App.tsx applyFonts. */
+:root {
+  --font-ui: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont,
+    "Segoe UI Variable Text", "Segoe UI", "Pretendard Variable", Pretendard,
+    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-code: "JetBrains Mono", "Fira Code", "Cascadia Code", "Cascadia Mono", Consolas,
+    ui-monospace, monospace;
+  --font-ui-size: 14px;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  /* 어두운 배경의 밝은 글자는 굵어 보여 뭉친다 — macOS는 antialiased로 얇게 잡고,
+     Windows(DirectWrite)는 이 속성을 무시하므로 커닝·합자로 다듬는다. */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1;
+}
+
+/* 컴포저 상단의 chip/button/select를 하나의 compact control 언어로 맞춘다. */
+.composer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.composer-toolbar > span,
+.composer-toolbar > label,
+.composer-toolbar > div > button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+.composer-toolbar > label:hover,
+.composer-toolbar > div > button:hover {
+  background: var(--c-surface);
+  border-color: var(--c-border-strong);
+  color: var(--c-text);
+}
+.composer-toolbar > div > button:focus-visible,
+.composer-toolbar > label:focus-within {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+
+.composer-toolbar select {
+  height: 26px;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: var(--c-text);
+  font: inherit;
+}
+
+/*
+ * DESIGN.md "Chromatic Discipline" — Scrollbar
+ * - 에디터 레지스터: 트랙/거터를 그리지 않고 중립 반투명 thumb만 띄운다
+ * - 피드백은 농도 3단(rest→hover→drag) + 두께 확장(6→8→10px)으로만. Teal 금지
+ * - 표준 scrollbar-width/scrollbar-color를 non-auto로 두면 엔진이 아래
+ *   ::-webkit-scrollbar 커스텀 규칙 전체를 무시한다(CSS Scrollbars 명세).
+ *   WKWebView(Safari 18.2+)의 그 폴백은 네이티브 오버레이 스크롤바
+ *   (다크 배경 → 흰 thumb)이므로 표준 속성을 쓰지 않는다.
+ */
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: var(--c-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 36px;
+  min-height: 36px;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background: var(--c-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background: var(--c-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  border-width: 1px;
+  background: var(--c-scrollbar-thumb-active);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Monaco는 네이티브 스크롤바 대신 자체 slider 요소를 렌더링한다. */
+.monaco-editor .monaco-scrollable-element > .scrollbar {
+  background: var(--c-scrollbar-track);
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
+  box-sizing: border-box;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background: var(--c-scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover {
+  border-width: 2px;
+  background: var(--c-scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider.active {
+  border-width: 1px;
+  background: var(--c-scrollbar-thumb-active);
+  background-clip: padding-box;
+}
+
+/* 우측 패널은 휠·트랙패드 스크롤을 유지하되 네이티브 스크롤바는 감춘다. */
+.side-panel-scrollbars-hidden,
+.side-panel-scrollbars-hidden * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.side-panel-scrollbars-hidden::-webkit-scrollbar,
+.side-panel-scrollbars-hidden *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* 파일 트리 아이콘 크기 — SVG 의 width/height **속성**(숫자 prop)을 CSS 로 덮는다.
+   `Icon`·`FileIcon` 은 앱 전역에서 쓰이므로 컴포넌트 자체를 건드리지 않고, 트리 안에서만
+   변수를 따르게 한다. 숫자 prop 은 CSS 가 없을 때의 폴백으로 남는다.
+   presentation attribute 는 CSS 선언에 지므로 이 규칙이 이긴다. */
+[data-file-tree] .ft-icon > svg {
+  width: var(--file-tree-icon);
+  height: var(--file-tree-icon);
+}
+
+[data-file-tree] .ft-chevron > svg {
+  width: var(--file-tree-chevron);
+  height: var(--file-tree-chevron);
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview-bridge-remote",
+  "description": "Remote IPC for the isolated Design Mode preview bridge",
+  "webviews": ["designmode-*"],
+  "local": false,
+  "remote": {
+    "urls": ["http://localhost:*", "http://127.0.0.1:*"]
+  },
+  "permissions": ["preview-bridge:allow-submit-result"]
+}

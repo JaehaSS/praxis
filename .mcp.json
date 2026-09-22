@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "excalidraw": {
+      "args": [
+        "-y",
+        "--silent",
+        "mcp-excalidraw-server"
+      ],
+      "command": "npx",
+      "env": {
+        "EXCALIDRAW_NO_AUTOSTART": "1"
+      }
+    },
+    "lsp-python": {
+      "args": [
+        "-y",
+        "--silent",
+        "git+https://github.com/jonrad/lsp-mcp#b48c04c52731e3e499352fc644992dcce6202db2",
+        "--lsp",
+        "pyright-langserver --stdio"
+      ],
+      "command": "npx"
+    },
+    "lsp-typescript": {
+      "args": [
+        "-y",
+        "--silent",
+        "git+https://github.com/jonrad/lsp-mcp#b48c04c52731e3e499352fc644992dcce6202db2",
+        "--lsp",
+        "npx -y --silent typescript-language-server --stdio"
+      ],
+      "command": "npx"
+    }
+  }
+}

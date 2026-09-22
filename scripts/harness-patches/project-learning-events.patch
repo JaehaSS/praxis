@@ -1,0 +1,1418 @@
+--- a/.agent-harness/project-learning.md
++++ b/.agent-harness/project-learning.md
+@@ -1,8 +1,14 @@
+ # Project learning protocol
+ 
+-Use one canonical ledger per project: `<ROOT>/docs/learnings.jsonl`. Both hosts
+-read and write that ledger through `project-learning.py`; do not create a skill,
+-profile, hook, or migration for this protocol.
++Use one logical ledger per project through `project-learning.py`. New learning
++and retirement events are immutable JSON files below `<ROOT>/docs/learnings/`.
++Both hosts use the same helper. Do not append to event files or maintain another
++ledger in a skill, profile, hook, or host-local directory.
++
++`<ROOT>/docs/learnings.jsonl`, when present, is a read-only legacy input. The
++helper reads it together with event files and removes identical event duplicates.
++It never appends new events to that file. Keep it unchanged for compatibility;
++do not regenerate a tracked JSONL aggregate after each record.
+ 
+ ## Recall and use
+ 
+@@ -48,8 +54,59 @@
+ ```
+ 
+ Separate worktrees do not automatically share an uncommitted ledger; synchronize
+-it deliberately with Git. Hosts using the same checkout share the ledger, and
+-renaming a checkout does not change its location.
++event files deliberately with Git. Include the event-store's static `.gitignore`;
++never track its locks or temporary files. Hosts using the same checkout share the
++ledger, and renaming a checkout does not change its location. Different new events
++use different paths, so independent branch additions need no custom merge driver.
++
++## Migrate and recover
++
++Explicitly migrate a project's legacy events with:
++
++```bash
++python3 "$HOME/.agent-harness/scripts/project-learning.py" migrate --project ROOT
++```
++
++Migration validates the complete input before publishing event files, preserves
++the legacy file, and is safe to retry after interruption. Existing IDs, event
++contents, and legacy equal-timestamp ordering are retained. No other project's
++data is migrated automatically. Same learning ID with different event contents
++is an error; do not silently select one version. Retirement events preserve their
++target learning ID separately from their own file identity.
++
++The legacy row limit remains 32,768 bytes; event files allow another 256 bytes for
++the envelope. Migration checks normalized JSONL and envelope sizes before any
++event publication. Unusual legacy JSON that grows beyond those limits when
++serialized is rejected with the original intact. Export also refuses rows that
++the old reader could not consume; it does not publish a partially usable backup.
++
++Malformed legacy rows are reported as `skipped` by recall for compatibility;
++migration and export refuse incomplete input. Invalid new event files fail
++explicitly. Recall on an empty project remains read-only and creates no files.
++
++All writers must use the upgraded helper to avoid new common-file conflicts.
++Older helpers cannot read event files and may still append to legacy JSONL. The
++new helper reads such additions, but mixed-version or independent-worktree writers
++cannot promise global payload deduplication. Upgrade writers before starting new
++work. A computer with a separate helper installation must be updated separately.
++
++Export the complete validated history, including retirements, to a **new** file:
++
++```bash
++python3 "$HOME/.agent-harness/scripts/project-learning.py" export --project ROOT --output FILE
++```
++
++Export atomically publishes legacy-compatible JSONL, preserving recall ordering,
++and refuses to overwrite an existing path. It is for recovery or explicit sharing;
++do not use it as a routinely updated tracked aggregate.
++
++For rollback, stop all writers, back up the legacy file, event directory and
++helper, and export to a new path. Verify the exported event set and old-helper
++recall in a temporary project before atomically replacing the legacy JSONL and
++restoring the old helper. If export or comparison fails, do not replace anything.
++Keep event files and backups until recovery is verified. Restoring only the old
++helper would hide events written after the upgrade. Automatic rollback is not
++provided.
+ 
+ ## Optional measurement
+ 
+--- a/.agent-harness/scripts/project-learning.py
++++ b/.agent-harness/scripts/project-learning.py
+@@ -11,11 +11,14 @@
+     MAX_INPUT_BYTES,
+     MAX_OUTPUT_BYTES,
+     UserError,
++    export_events,
++    migrate_learnings,
+     recall_learnings,
+     record_learning,
+     resolve_project,
+     retire_learning,
+ )
++from project_learning_export import export_jsonl
+ 
+ 
+ def parse_args() -> argparse.Namespace:
+@@ -32,6 +35,11 @@
+     retire.add_argument("--project")
+     retire.add_argument("--id", required=True)
+     retire.add_argument("--reason", required=True)
++    migrate = commands.add_parser("migrate")
++    migrate.add_argument("--project")
++    export = commands.add_parser("export")
++    export.add_argument("--project")
++    export.add_argument("--output", required=True)
+     return parser.parse_args()
+ 
+ 
+@@ -82,6 +90,20 @@
+             payload, skipped = retire_learning(resolve_project(args.project, True), args.id, args.reason)
+             emit({**payload, "skipped": skipped})
+             return 0
++        if args.command == "migrate":
++            payload, skipped = migrate_learnings(resolve_project(args.project, True))
++            emit({**payload, "skipped": skipped})
++            return 0
++        if args.command == "export":
++            root = resolve_project(args.project, False)
++            if root is None:
++                raise UserError("--project is required outside a Git checkout")
++            events, skipped = export_events(root)
++            if skipped:
++                raise UserError("legacy learnings contain malformed rows")
++            output = export_jsonl(args.output, events, UserError)
++            emit({"status": "ok", "output": output, "events": len(events), "skipped": skipped})
++            return 0
+         if args.limit < 1 or args.limit > 20:
+             raise UserError("limit must be between 1 and 20")
+         root = resolve_project(args.project, False)
+--- /dev/null
++++ b/.agent-harness/scripts/project_learning_events.py
+@@ -0,0 +1,79 @@
++"""Event identity and schema validation for project learnings."""
++
++import hashlib
++import json
++import math
++
++
++SCHEMA_VERSION = 1
++TEXT_FIELDS = ("condition", "failed_approach", "correction", "evidence")
++TRIGGERS = {"user-correction", "failed-approach", "recurrence", "risk"}
++
++
++def canonical_bytes(value: object) -> bytes:
++    return json.dumps(
++        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
++    ).encode("utf-8")
++
++
++def encode_envelope(envelope: dict) -> bytes:
++    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
++
++
++def encode_legacy(event: dict) -> bytes:
++    return json.dumps(event, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
++
++
++def event_key(event: dict) -> str:
++    return hashlib.sha256(canonical_bytes(event)).hexdigest()
++
++
++def event_filename(event: dict) -> str:
++    if event["type"] == "learning":
++        identity = {"id": event["id"], "type": "learning"}
++        return hashlib.sha256(canonical_bytes(identity)).hexdigest() + ".json"
++    return event_key(event) + ".json"
++
++
++def valid_event(event: object, strict: bool = False) -> bool:
++    if not isinstance(event, dict) or not isinstance(event.get("type"), str):
++        return False
++    if event["type"] == "learning":
++        return (
++            isinstance(event.get("id"), str)
++            and isinstance(event.get("ts"), str)
++            and isinstance(event.get("trigger"), str)
++            and event["trigger"] in TRIGGERS
++            and all(isinstance(event.get(field), str) for field in TEXT_FIELDS)
++            and isinstance(event.get("tags", []), list)
++            and all(isinstance(tag, str) for tag in event.get("tags", []))
++        )
++    return event["type"] == "retire" and all(
++        isinstance(event.get(field), str) for field in ("id", "reason", "ts")
++    )
++
++
++def valid_envelope(value: object, filename: str) -> tuple[dict, int | None] | None:
++    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != SCHEMA_VERSION:
++        return None
++    if set(value) - {"version", "event", "legacy_index"} or "event" not in value:
++        return None
++    event = value["event"]
++    legacy_index = value.get("legacy_index")
++    if not valid_event(event, strict=True) or not finite_json(event) or event_filename(event) != filename:
++        return None
++    if "legacy_index" in value and (
++        not isinstance(legacy_index, int) or isinstance(legacy_index, bool) or legacy_index < 0
++    ):
++        return None
++    return event, legacy_index
++
++
++def finite_json(value: object) -> bool:
++    if isinstance(value, float):
++        return math.isfinite(value)
++    if isinstance(value, dict):
++        return all(finite_json(item) for item in value.values())
++    if isinstance(value, list):
++        return all(finite_json(item) for item in value)
++    return True
+--- /dev/null
++++ b/.agent-harness/scripts/project_learning_export.py
+@@ -0,0 +1,53 @@
++"""Atomic legacy JSONL export for verified learning events."""
++
++import json
++import os
++from pathlib import Path
++
++from project_learning_publish import write_all
++from project_learning_events import encode_legacy
++from project_learning_storage import MAX_LINE_BYTES
++
++
++def export_jsonl(output: str, events: list[dict], error_type: type[Exception]) -> str:
++    lines = [_legacy_line(event, error_type) for event in events]
++    target = Path(output).expanduser()
++    if not target.is_absolute():
++        target = Path.cwd() / target
++    parent_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
++    temporary = ".tmp-project-learning-" + os.urandom(16).hex()
++    try:
++        _publish(parent_fd, target.name, temporary, lines)
++    except OSError as error:
++        raise error_type("cannot publish export safely") from error
++    finally:
++        os.close(parent_fd)
++    return str(target)
++
++
++def _legacy_line(event: dict, error_type: type[Exception]) -> bytes:
++    encoded = encode_legacy(event)
++    if len(encoded) + 1 > MAX_LINE_BYTES:
++        raise error_type("learning event exceeds legacy line limit")
++    return encoded + b"\n"
++
++
++def _publish(parent_fd: int, name: str, temporary: str, lines: list[bytes]) -> None:
++    try:
++        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
++        descriptor = os.open(temporary, flags, 0o600, dir_fd=parent_fd)
++        try:
++            for line in lines:
++                write_all(descriptor, line)
++            os.fsync(descriptor)
++        finally:
++            os.close(descriptor)
++        os.link(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
++        os.fsync(parent_fd)
++    except FileExistsError:
++        raise OSError("export output already exists") from None
++    finally:
++        try:
++            os.unlink(temporary, dir_fd=parent_fd)
++        except FileNotFoundError:
++            pass
+--- a/.agent-harness/scripts/project_learning_lib.py
++++ b/.agent-harness/scripts/project_learning_lib.py
+@@ -1,6 +1,5 @@
+-"""Project-local append-only learning ledger helpers."""
++"""Project-local learning ledger domain helpers."""
+ 
+-import fcntl
+ import json
+ import os
+ import re
+@@ -8,13 +7,13 @@
+ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+-from project_learning_storage import append_event, open_ledger, read_events
++from project_learning_events import TEXT_FIELDS, TRIGGERS, encode_envelope, encode_legacy, event_filename, event_key, finite_json, valid_event
++from project_learning_storage import MAX_EVENT_BYTES, MAX_LINE_BYTES, open_store, publish_event, read_event_files, read_legacy
++
+ 
+ MAX_INPUT_BYTES = 8192
+ MAX_RECORD_BYTES = 3072
+ MAX_OUTPUT_BYTES = 12288
+-TEXT_FIELDS = ("condition", "failed_approach", "correction", "evidence")
+-TRIGGERS = {"user-correction", "failed-approach", "recurrence", "risk"}
+ 
+ 
+ class UserError(Exception):
+@@ -22,12 +21,8 @@
+ 
+ 
+ def git_root() -> Path | None:
+-    result = subprocess.run(
+-        ["git", "rev-parse", "--show-toplevel"], text=True, capture_output=True, check=False
+-    )
+-    if result.returncode or not result.stdout.strip():
+-        return None
+-    return Path(result.stdout.strip()).resolve()
++    result = subprocess.run(["git", "rev-parse", "--show-toplevel"], text=True, capture_output=True, check=False)
++    return Path(result.stdout.strip()).resolve() if not result.returncode and result.stdout.strip() else None
+ 
+ 
+ def resolve_project(project: str | None, write: bool) -> Path | None:
+@@ -43,26 +38,11 @@
+ 
+ 
+ def _valid_learning(record: object) -> bool:
+-    if not isinstance(record, dict) or record.get("type") != "learning":
+-        return False
+-    if not isinstance(record.get("id"), str) or not isinstance(record.get("ts"), str):
+-        return False
+-    if not isinstance(record.get("trigger"), str) or record["trigger"] not in TRIGGERS:
+-        return False
+-    if not all(isinstance(record.get(field), str) for field in TEXT_FIELDS):
+-        return False
+-    tags = record.get("tags", [])
+-    return isinstance(tags, list) and all(isinstance(tag, str) for tag in tags)
++    return valid_event(record) and record.get("type") == "learning" and finite_json(record)
+ 
+ 
+ def _valid_retirement(record: object) -> bool:
+-    return (
+-        isinstance(record, dict)
+-        and record.get("type") == "retire"
+-        and isinstance(record.get("id"), str)
+-        and isinstance(record.get("reason"), str)
+-        and isinstance(record.get("ts"), str)
+-    )
++    return valid_event(record) and record.get("type") == "retire" and finite_json(record)
+ 
+ 
+ def _active_records(events: list[dict]) -> list[dict]:
+@@ -79,82 +59,137 @@
+         raise UserError("input must contain only learning fields")
+     if not isinstance(raw.get("trigger"), str) or raw["trigger"] not in TRIGGERS:
+         raise UserError("input has missing or invalid learning fields")
+-    if not all(field in raw for field in TEXT_FIELDS):
+-        raise UserError("input has missing or invalid learning fields")
+-    if not all(isinstance(raw[field], str) and raw[field].strip() for field in TEXT_FIELDS):
++    if not all(isinstance(raw.get(field), str) and raw[field].strip() for field in TEXT_FIELDS):
+         raise UserError("learning text fields must be nonempty strings")
+     tags = raw.get("tags", [])
+     if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+         raise UserError("tags must be a list of strings")
+-    payload = {field: raw[field] for field in ("trigger", *TEXT_FIELDS)}
+-    payload["tags"] = tags
+-    if len(payload["tags"]) > 32 or len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RECORD_BYTES:
++    payload = {field: raw[field] for field in ("trigger", *TEXT_FIELDS)} | {"tags": tags}
++    if len(tags) > 32 or len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > MAX_RECORD_BYTES:
+         raise UserError("learning record is too large")
+     return payload
+ 
+ 
++def _load_events(store: object) -> tuple[list[dict], int, set[str]]:
++    legacy, skipped = read_legacy(store, lambda event: _valid_learning(event) or _valid_retirement(event))
++    files = read_event_files(store, UserError)
++    merged, learning_ids, file_keys = {}, {}, set()
++    for event, index in legacy:
++        _merge_event(merged, learning_ids, event, (0, index), True)
++    for event, index in files:
++        key = event_key(event)
++        file_keys.add(key)
++        _merge_event(merged, learning_ids, event, (0, index) if index is not None else (1, key), False)
++    ordered = sorted(merged.values(), key=lambda item: (item[1], item[2]))
++    return [item[0] for item in ordered], skipped, file_keys
++
++
++def _merge_event(merged: dict, learning_ids: dict, event: dict, order: tuple, legacy: bool) -> None:
++    key = event_key(event)
++    if event["type"] == "learning":
++        previous = learning_ids.setdefault(event["id"], key)
++        if previous != key:
++            raise UserError("learning id has conflicting event content")
++    previous = merged.get(key)
++    replaces_file = legacy and not previous[3] if previous is not None else False
++    if previous is None or replaces_file or (legacy == previous[3] and (order, key) < (previous[1], previous[2])):
++        merged[key] = (event, order, key, legacy)
++
++
++def _run(root: Path, write: bool, create: bool, action: object):
++    store = open_store(root, write, create, UserError)
++    if store is None:
++        return None
++    try:
++        store.lock(write)
++        result = action(store)
++        if write and store.events_fd is not None:
++            os.fsync(store.events_fd)
++        return result
++    finally:
++        store.unlock()
++        store.close()
++
++
+ def record_learning(root: Path, raw: object) -> tuple[dict, int]:
+     payload = _payload(raw)
+-    fd = open_ledger(root, write=True, create=True, error_type=UserError)
+-    assert fd is not None
+-    try:
+-        fcntl.flock(fd, fcntl.LOCK_EX)
+-        events, skipped = read_events(fd, lambda item: _valid_learning(item) or _valid_retirement(item))
++
++    def record(store: object) -> tuple[dict, int]:
++        events, skipped, _ = _load_events(store)
+         for existing in _active_records(events):
+             if {field: existing.get(field) for field in payload} == payload:
+                 return {"status": "ok", "id": existing["id"], "duplicate": True}, skipped
+-        identifier = "learning-" + os.urandom(8).hex()
+-        append_event(fd, {"type": "learning", "id": identifier, "ts": _timestamp(), **payload})
+-        return {"status": "ok", "id": identifier, "duplicate": False}, skipped
+-    finally:
+-        fcntl.flock(fd, fcntl.LOCK_UN)
+-        os.close(fd)
++        event = {"type": "learning", "id": "learning-" + os.urandom(8).hex(), "ts": _timestamp(), **payload}
++        if not publish_event(store, event_filename(event), {"version": 1, "event": event}):
++            raise UserError("learning id collision")
++        return {"status": "ok", "id": event["id"], "duplicate": False}, skipped
++
++    return _run(root, True, True, record)
+ 
+ 
+ def retire_learning(root: Path, identifier: str, reason: str) -> tuple[dict, int]:
+     if not identifier or not reason or len(reason.encode("utf-8")) > MAX_RECORD_BYTES:
+         raise UserError("id and a reasonably sized reason are required")
+-    fd = open_ledger(root, write=True, create=False, error_type=UserError)
+-    if fd is None:
+-        raise UserError("learning id is not active")
+-    try:
+-        fcntl.flock(fd, fcntl.LOCK_EX)
+-        events, skipped = read_events(fd, lambda item: _valid_learning(item) or _valid_retirement(item))
++
++    def retire(store: object) -> tuple[dict, int]:
++        events, skipped, _ = _load_events(store)
+         if identifier not in {record["id"] for record in _active_records(events)}:
+             raise UserError("learning id is not active")
+-        append_event(fd, {"type": "retire", "id": identifier, "reason": reason, "ts": _timestamp()})
++        event = {"type": "retire", "id": identifier, "reason": reason, "ts": _timestamp()}
++        publish_event(store, event_filename(event), {"version": 1, "event": event})
+         return {"status": "ok", "id": identifier, "retired": True}, skipped
+-    finally:
+-        fcntl.flock(fd, fcntl.LOCK_UN)
+-        os.close(fd)
++
++    result = _run(root, True, False, retire)
++    if result is None:
++        raise UserError("learning id is not active")
++    return result
+ 
+ 
+ def recall_learnings(root: Path | None, query: str, limit: int) -> tuple[list[dict], int]:
+     if root is None:
+         return [], 0
+-    fd = open_ledger(root, write=False, create=False, error_type=UserError)
+-    if fd is None:
++    result = _run(root, False, False, _load_events)
++    if result is None:
+         return [], 0
+-    try:
+-        fcntl.flock(fd, fcntl.LOCK_SH)
+-        events, skipped = read_events(fd, lambda item: _valid_learning(item) or _valid_retirement(item))
+-    finally:
+-        fcntl.flock(fd, fcntl.LOCK_UN)
+-        os.close(fd)
+-    active = _active_records(events)
+-    tokens = re.findall(r"\w+", query.casefold())
++    events, skipped, _ = result
++    active, tokens = _active_records(events), re.findall(r"\w+", query.casefold())
+     if not tokens:
+         if query.strip():
+             return [], skipped
+-        indexed = enumerate(active)
+-        ordered = sorted(indexed, key=lambda item: (item[1]["ts"], item[0]), reverse=True)
++        ordered = sorted(enumerate(active), key=lambda item: (item[1]["ts"], item[0]), reverse=True)
+         return [item[1] for item in ordered[:limit]], skipped
+     ranked = []
+     for index, record in enumerate(active):
+         text = " ".join(str(record.get(field, "")) for field in (*TEXT_FIELDS, "trigger", "tags")).casefold()
+-        words = re.findall(r"\w+", text)
+-        score = sum(words.count(token) for token in tokens)
++        score = sum(re.findall(r"\w+", text).count(token) for token in tokens)
+         if score:
+             ranked.append((score, record["ts"], index, record))
+-    ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
++    ranked.sort(key=lambda item: item[:3], reverse=True)
+     return [item[3] for item in ranked[:limit]], skipped
++
++
++def migrate_learnings(root: Path) -> tuple[dict, int]:
++    def migrate(store: object) -> tuple[dict, int]:
++        events, skipped, file_keys = _load_events(store)
++        if skipped:
++            raise UserError("legacy learnings contain malformed rows")
++        legacy, _ = read_legacy(store, lambda event: _valid_learning(event) or _valid_retirement(event))
++        pending = [
++            (event, index) for event, index in legacy if event_key(event) not in file_keys
++        ]
++        for event, index in pending:
++            envelope = {"version": 1, "event": event, "legacy_index": index}
++            if len(encode_envelope(envelope)) > MAX_EVENT_BYTES or len(encode_legacy(event)) + 1 > MAX_LINE_BYTES:
++                raise UserError("learning event exceeds event file limit")
++        migrated = 0
++        for event, index in pending:
++            envelope = {"version": 1, "event": event, "legacy_index": index}
++            migrated += publish_event(store, event_filename(event), envelope)
++        return {"status": "ok", "migrated": migrated, "events": len(events)}, skipped
++
++    return _run(root, True, True, migrate)
++
++
++def export_events(root: Path) -> tuple[list[dict], int]:
++    result = _run(root, False, False, _load_events)
++    return ([], 0) if result is None else result[:2]
+--- /dev/null
++++ b/.agent-harness/scripts/project_learning_publish.py
+@@ -0,0 +1,33 @@
++"""Atomic no-clobber file publication helpers."""
++
++import os
++
++
++def write_all(descriptor: int, data: bytes) -> None:
++    while data:
++        written = os.write(descriptor, data)
++        if written <= 0:
++            raise OSError("cannot write learning storage")
++        data = data[written:]
++
++
++def publish_bytes(directory_fd: int, filename: str, data: bytes) -> bool:
++    temporary = ".tmp-" + os.urandom(16).hex()
++    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
++    try:
++        descriptor = os.open(temporary, flags, 0o600, dir_fd=directory_fd)
++        try:
++            write_all(descriptor, data)
++            os.fsync(descriptor)
++        finally:
++            os.close(descriptor)
++        os.link(temporary, filename, src_dir_fd=directory_fd, dst_dir_fd=directory_fd, follow_symlinks=False)
++    except FileExistsError:
++        return False
++    finally:
++        try:
++            os.unlink(temporary, dir_fd=directory_fd)
++        except FileNotFoundError:
++            pass
++    os.fsync(directory_fd)
++    return True
+--- a/.agent-harness/scripts/project_learning_storage.py
++++ b/.agent-harness/scripts/project_learning_storage.py
+@@ -1,85 +1,199 @@
+-"""Safe ledger file access with advisory locks owned by callers."""
++"""Safe event-store access for project learning records."""
+ 
++import fcntl
+ import json
+ import os
++import re
+ import stat
+ from pathlib import Path
+ 
++from project_learning_events import encode_envelope, valid_envelope
++from project_learning_publish import publish_bytes
++
+ 
+ MAX_LINE_BYTES = 32768
++MAX_EVENT_BYTES = MAX_LINE_BYTES + 256
++EVENT_NAME = re.compile(r"[0-9a-f]{64}\.json\Z")
+ 
+ 
+-def open_ledger(root: Path, write: bool, create: bool, error_type: type[Exception]) -> int | None:
+-    docs = root / "docs"
+-    if docs.is_symlink():
+-        raise error_type("docs directory must not be a symlink")
+-    if not docs.exists():
+-        if not create:
+-            return None
+-        try:
+-            docs.mkdir(mode=0o700)
+-        except FileExistsError:
+-            pass
+-    if docs.is_symlink() or not docs.is_dir():
+-        raise error_type("docs path must be a directory")
++class EventStore:
++    def __init__(self, docs_fd: int, events_fd: int | None, legacy_fd: int | None, lock_fd: int | None):
++        self.docs_fd, self.events_fd = docs_fd, events_fd
++        self.legacy_fd, self.lock_fd = legacy_fd, lock_fd
++
++    def close(self) -> None:
++        for descriptor in (self.lock_fd, self.legacy_fd, self.events_fd, self.docs_fd):
++            if descriptor is not None:
++                os.close(descriptor)
++
++    def lock(self, exclusive: bool) -> None:
++        if self.lock_fd is not None:
++            fcntl.flock(self.lock_fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
++        if exclusive and self.events_fd is not None:
++            _ensure_ignore(self.events_fd)
++        if self.legacy_fd is not None:
++            fcntl.flock(self.legacy_fd, fcntl.LOCK_SH)
++
++    def unlock(self) -> None:
++        if self.legacy_fd is not None:
++            fcntl.flock(self.legacy_fd, fcntl.LOCK_UN)
++        if self.lock_fd is not None:
++            fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
++
++
++def open_store(root: Path, write: bool, create: bool, error_type: type[Exception]) -> EventStore | None:
++    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
++    try:
++        docs_fd = _directory(root_fd, "docs", create)
++    finally:
++        os.close(root_fd)
++    if docs_fd is None:
++        return None
++    events_fd = legacy_fd = lock_fd = None
++    try:
++        events_fd = _directory(docs_fd, "learnings", write)
++        legacy_fd = _regular(docs_fd, "learnings.jsonl", False, False)
++        lock_fd = _regular(events_fd, ".lock", write, write) if events_fd is not None else None
++        return EventStore(docs_fd, events_fd, legacy_fd, lock_fd)
++    except OSError as error:
++        for descriptor in (lock_fd, legacy_fd, events_fd, docs_fd):
++            if descriptor is not None:
++                os.close(descriptor)
++        raise error_type("cannot open learning storage safely") from error
++
++
++def _directory(parent_fd: int, name: str, create: bool) -> int | None:
+     flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+     try:
+-        directory_fd = os.open(docs, flags)
+-    except OSError as error:
+-        raise error_type("cannot open docs directory safely") from error
+-    try:
+-        flags = os.O_RDWR | os.O_APPEND if write else os.O_RDONLY
+-        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+-        ledger_fd = _open_file(directory_fd, flags, create)
+-        if ledger_fd is None:
+-            return None
+-        if not stat.S_ISREG(os.fstat(ledger_fd).st_mode):
+-            os.close(ledger_fd)
+-            raise error_type("ledger must be a regular file")
+-        return ledger_fd
+-    except OSError as error:
+-        raise error_type("cannot open ledger safely") from error
+-    finally:
+-        os.close(directory_fd)
+-
+-
+-def _open_file(directory_fd: int, flags: int, create: bool) -> int | None:
+-    try:
+-        return os.open("learnings.jsonl", flags, dir_fd=directory_fd)
++        return os.open(name, flags, dir_fd=parent_fd)
+     except FileNotFoundError:
+         if not create:
+             return None
+     try:
+-        return os.open("learnings.jsonl", flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd)
++        os.mkdir(name, 0o700, dir_fd=parent_fd)
++        os.fsync(parent_fd)
+     except FileExistsError:
+-        return os.open("learnings.jsonl", flags, dir_fd=directory_fd)
++        pass
++    return os.open(name, flags, dir_fd=parent_fd)
+ 
+ 
+-def read_events(fd: int, valid: object) -> tuple[list[dict], int]:
+-    events, skipped = [], 0
+-    with os.fdopen(os.dup(fd), "rb") as ledger:
++def _regular(parent_fd: int | None, name: str, write: bool, create: bool) -> int | None:
++    if parent_fd is None:
++        return None
++    flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
++    try:
++        descriptor = os.open(name, flags, dir_fd=parent_fd)
++    except FileNotFoundError:
++        if not create:
++            return None
++        try:
++            descriptor = os.open(name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent_fd)
++        except FileExistsError:
++            descriptor = os.open(name, flags, dir_fd=parent_fd)
++    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
++        os.close(descriptor)
++        raise OSError("learning storage paths must be regular files")
++    return descriptor
++
++
++def read_legacy(store: EventStore, valid: object) -> tuple[list[tuple[dict, int]], int]:
++    if store.legacy_fd is None:
++        return [], 0
++    events, skipped, index = [], 0, 0
++    os.lseek(store.legacy_fd, 0, os.SEEK_SET)
++    with os.fdopen(os.dup(store.legacy_fd), "rb") as ledger:
+         while line := ledger.readline(MAX_LINE_BYTES + 1):
+             if len(line) > MAX_LINE_BYTES:
+                 skipped += 1
+                 while line and not line.endswith(b"\n"):
+                     line = ledger.readline(MAX_LINE_BYTES + 1)
++                index += 1
+                 continue
+             try:
+-                record = json.loads(line.decode("utf-8"))
++                event = json.loads(line.decode("utf-8"))
+             except (UnicodeDecodeError, json.JSONDecodeError):
+                 skipped += 1
++                index += 1
+                 continue
+-            if valid(record):
+-                events.append(record)
++            if valid(event):
++                events.append((event, index))
+             else:
+                 skipped += 1
++            index += 1
+     return events, skipped
+ 
+ 
+-def append_event(fd: int, record: dict) -> None:
+-    encoded = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+-    size = os.fstat(fd).st_size
+-    if size and os.pread(fd, 1, size - 1) != b"\n":
+-        os.write(fd, b"\n")
+-    os.write(fd, encoded)
+-    os.fsync(fd)
++def read_event_files(store: EventStore, error_type: type[Exception]) -> list[tuple[dict, int | None]]:
++    if store.events_fd is None:
++        return []
++    events = []
++    for name in sorted(os.listdir(store.events_fd)):
++        descriptor = _event_descriptor(store.events_fd, name, error_type)
++        if descriptor is None:
++            continue
++        try:
++            data = _read_all(descriptor)
++        except ValueError as error:
++            raise error_type("invalid learning event file") from error
++        finally:
++            os.close(descriptor)
++        try:
++            parsed = valid_envelope(json.loads(data.decode("utf-8")), name)
++        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
++            parsed = None
++        if parsed is None:
++            raise error_type("invalid learning event file")
++        events.append(parsed)
++    return events
++
++
++def _event_descriptor(events_fd: int, name: str, error_type: type[Exception]) -> int | None:
++    if name.startswith(".tmp-"):
++        descriptor = _regular(events_fd, name, False, False)
++        if descriptor is None:
++            return None
++        os.close(descriptor)
++        return None
++    if name in {".lock", ".gitignore"}:
++        descriptor = _regular(events_fd, name, False, False)
++        if descriptor is None:
++            raise error_type("invalid learning event file")
++        os.close(descriptor)
++        return None
++    if not EVENT_NAME.fullmatch(name):
++        raise error_type("invalid learning event file")
++    try:
++        return _regular(events_fd, name, False, False)
++    except OSError as error:
++        raise error_type("invalid learning event file") from error
++
++
++def _read_all(descriptor: int) -> bytes:
++    chunks, size = [], 0
++    while chunk := os.read(descriptor, MAX_EVENT_BYTES + 1):
++        chunks.append(chunk)
++        size += len(chunk)
++        if size > MAX_EVENT_BYTES:
++            raise ValueError("learning event is too large")
++    return b"".join(chunks)
++
++
++def _ensure_ignore(events_fd: int) -> None:
++    rules = b".lock\n.tmp-*\n"
++    descriptor = _regular(events_fd, ".gitignore", False, False)
++    if descriptor is not None:
++        try:
++            if _read_all(descriptor) != rules:
++                raise OSError("learning .gitignore has unexpected contents")
++        finally:
++            os.close(descriptor)
++        return
++    if not publish_bytes(events_fd, ".gitignore", rules):
++        _ensure_ignore(events_fd)
++
++
++def publish_event(store: EventStore, filename: str, envelope: dict) -> bool:
++    assert store.events_fd is not None
++    encoded = encode_envelope(envelope)
++    return publish_bytes(store.events_fd, filename, encoded)
++
+--- a/.agent-harness/scripts/tests/test_project_learning_cli.py
++++ b/.agent-harness/scripts/tests/test_project_learning_cli.py
+@@ -90,8 +90,11 @@
+         retired = self.run_cli("retire", "--id", stored["id"], "--reason", "fixed")[1]
+         self.assertTrue(retired["retired"])
+         self.assertEqual(self.recall("parser")["records"], [])
+-        rows = (self.root / "docs" / "learnings.jsonl").read_text(encoding="utf-8").splitlines()
+-        self.assertEqual([json.loads(row)["type"] for row in rows], ["learning", "retire"])
++        events = sorted((self.root / "docs" / "learnings").glob("*.json"))
++        self.assertCountEqual(
++            [json.loads(path.read_text(encoding="utf-8"))["event"]["type"] for path in events],
++            ["learning", "retire"],
++        )
+ 
+     def test_duplicate_basenames_are_isolated_and_rename_follows_ledger(self):
+         other = Path(self.temp.name) / "other" / "project"
+@@ -156,23 +159,33 @@
+     def test_concurrent_records_do_not_drop_events(self):
+         processes = []
+         try:
+-            for index in range(10):
+-                lesson = self.lesson(correction=f"parser {index}", evidence=f"evidence {index}")
+-                processes.append(
+-                    subprocess.Popen(
+-                        [sys.executable, str(CLI), "record", "--project", str(self.root)],
+-                        stdin=subprocess.PIPE,
+-                        stdout=subprocess.PIPE,
+-                        stderr=subprocess.PIPE,
+-                        text=True,
+-                    )
++            for round_index in range(3):
++                root = self.root / str(round_index)
++                root.mkdir()
++                for index in range(16):
++                    lesson = self.lesson(correction=f"parser {round_index}-{index}", evidence=f"evidence {index}")
++                    processes.append(
++                        subprocess.Popen(
++                            [sys.executable, str(CLI), "record", "--project", str(root)],
++                            stdin=subprocess.PIPE,
++                            stdout=subprocess.PIPE,
++                            stderr=subprocess.PIPE,
++                            text=True,
++                        )
+                 )
+-                processes[-1].stdin.write(json.dumps(lesson))
+-                processes[-1].stdin.close()
+-            for process in processes:
+-                process.wait(timeout=15)
+-                self.assertEqual(process.returncode, 0, process.stderr.read())
+-            self.assertEqual(len(self.recall("", limit=20)["records"]), 10)
++                    processes[-1].stdin.write(json.dumps(lesson))
++                    processes[-1].stdin.close()
++                batch, processes = processes, []
++                results = []
++                for process in batch:
++                    process.wait(timeout=15)
++                    stdout, stderr = process.stdout.read(), process.stderr.read()
++                    results.append((process.returncode, stderr + stdout))
++                    process.stdout.close()
++                    process.stderr.close()
++                for returncode, output in results:
++                    self.assertEqual(returncode, 0, output)
++                self.assertEqual(len(self.recall("", root=root, limit=20)["records"]), 16)
+         finally:
+             for process in processes:
+                 if process.poll() is None:
+--- /dev/null
++++ b/.agent-harness/scripts/tests/test_project_learning_events.py
+@@ -0,0 +1,336 @@
++import json
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++
++SCRIPTS = Path(__file__).resolve().parents[1]
++CLI = SCRIPTS / "project-learning.py"
++
++
++class ProjectLearningEventAcceptanceTest(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name) / "project"
++        self.root.mkdir()
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def lesson(self, suffix="one"):
++        return {
++            "trigger": "failed-approach",
++            "condition": f"parser regression {suffix}",
++            "failed_approach": "used shell splitting",
++            "correction": f"pass parser input {suffix}",
++            "evidence": f"acceptance evidence {suffix}",
++            "tags": ["parser"],
++        }
++
++    def event(self, identifier, timestamp, suffix="one"):
++        return {"type": "learning", "id": identifier, "ts": timestamp, **self.lesson(suffix)}
++
++    def run_cli(self, command, *args, root=None, data=None, check=True):
++        target = root or self.root
++        result = subprocess.run(
++            [sys.executable, str(CLI), command, "--project", str(target), *args],
++            input=None if data is None else json.dumps(data, ensure_ascii=False),
++            text=True,
++            capture_output=True,
++            check=False,
++        )
++        payload = json.loads(result.stdout)
++        if check:
++            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
++        return result, payload
++
++    def record(self, suffix="one", root=None):
++        return self.run_cli("record", root=root, data=self.lesson(suffix))[1]
++
++    def recall(self, root=None, query="", limit=20):
++        return self.run_cli("recall", "--query", query, "--limit", str(limit), root=root)[1]
++
++    def migrate(self, root=None, check=True):
++        return self.run_cli("migrate", root=root, check=check)
++
++    def export(self, output, root=None, check=True):
++        return self.run_cli("export", "--output", str(output), root=root, check=check)
++
++    def event_files(self, root=None):
++        directory = (root or self.root) / "docs" / "learnings"
++        return sorted(path for path in directory.rglob("*.json") if path.is_file()) if directory.is_dir() else []
++
++    def write_legacy(self, *events):
++        docs = self.root / "docs"
++        docs.mkdir(exist_ok=True)
++        (docs / "learnings.jsonl").write_text(
++            "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n",
++            encoding="utf-8",
++        )
++
++    @staticmethod
++    def old_helper_active_ids(lines):
++        """Minimal pre-event reader: all retires hide their target, latest first."""
++        events = [json.loads(line) for line in lines if line.strip()]
++        retired = {event["id"] for event in events if event["type"] == "retire"}
++        active = [event for event in events if event["type"] == "learning" and event["id"] not in retired]
++        return [event["id"] for _, event in sorted(enumerate(active), key=lambda item: (item[1]["ts"], item[0]), reverse=True)]
++
++    def test_should_write_events_without_changing_legacy_bytes_when_recording_or_retiring(self):
++        legacy = self.event("legacy", "2026-01-01T00:00:00Z")
++        self.write_legacy(legacy)
++        ledger = self.root / "docs" / "learnings.jsonl"
++        before = ledger.read_bytes()
++
++        recorded = self.record("new")
++        self.run_cli("retire", "--id", recorded["id"], "--reason", "fixed")
++
++        self.assertEqual(ledger.read_bytes(), before)
++        self.assertEqual(len(self.event_files()), 2)
++
++    def test_should_deduplicate_migrated_legacy_events_and_preserve_equal_timestamp_retire_history(self):
++        old = self.event("old", "2026-01-01T00:00:00Z", "old")
++        new = self.event("new", "2026-01-01T00:00:00Z", "new")
++        retired = {"type": "retire", "id": "old", "reason": "obsolete", "ts": "2026-01-02T00:00:00Z"}
++        self.write_legacy(old, new, retired)
++
++        _, first = self.migrate()
++        files_after_first = [(path.name, path.read_bytes()) for path in self.event_files()]
++        _, second = self.migrate()
++        exported = Path(self.temp.name) / "all-events.jsonl"
++        _, export = self.export(exported)
++
++        self.assertEqual(first["migrated"], 3)
++        self.assertEqual(second["migrated"], 0)
++        self.assertEqual([(path.name, path.read_bytes()) for path in self.event_files()], files_after_first)
++        self.assertEqual([record["id"] for record in self.recall()["records"]], ["new"])
++        self.assertEqual([json.loads(line)["type"] for line in exported.read_text(encoding="utf-8").splitlines()], ["learning", "learning", "retire"])
++        self.assertEqual(export["events"], 3)
++
++    def test_should_preserve_optional_and_unknown_legacy_fields_through_migrate_and_export(self):
++        first = self.event("old", "2026-01-01T00:00:00Z", "old")
++        first.pop("tags")
++        first["historical_source"] = "pre-event-helper"
++        second = self.event("new", "2026-01-01T00:00:00Z", "new")
++        second["historical_sequence"] = 2
++        self.write_legacy(first, second)
++
++        self.migrate()
++        (self.root / "docs" / "learnings.jsonl").unlink()
++        output = Path(self.temp.name) / "roundtrip.jsonl"
++        self.export(output)
++
++        self.assertEqual([record["id"] for record in self.recall()["records"]], ["new", "old"])
++        self.assertEqual(
++            [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()],
++            [first, second],
++        )
++
++    def test_should_order_same_timestamp_legacy_then_new_event_files(self):
++        self.write_legacy(self.event("legacy", "2026-01-01T00:00:00Z", "legacy"))
++        recorded = self.record("new")
++        # The CLI owns timestamps, so a controlled event fixture creates the
++        # specified same-timestamp mixed-ledger condition.
++        event_file = next(
++            path
++            for path in self.event_files()
++            if json.loads(path.read_text(encoding="utf-8"))["event"]["id"] == recorded["id"]
++        )
++        envelope = json.loads(event_file.read_text(encoding="utf-8"))
++        envelope["event"]["ts"] = "2026-01-01T00:00:00Z"
++        event_file.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
++
++        self.assertEqual(self.recall()["records"][0]["id"], recorded["id"])
++
++    def test_should_fail_migration_preflight_without_publishing_events_for_invalid_legacy_or_conflicting_id(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        (docs / "learnings.jsonl").write_text('{"broken":\n', encoding="utf-8")
++
++        invalid_result, invalid = self.migrate(check=False)
++
++        self.assertEqual(invalid_result.returncode, 2)
++        self.assertEqual(invalid["status"], "error")
++        self.assertEqual(self.event_files(), [])
++
++        original = self.event("shared", "2026-01-01T00:00:00Z", "original")
++        self.write_legacy(original)
++        self.migrate()
++        before = [(path.name, path.read_bytes()) for path in self.event_files()]
++        conflicting = self.event("shared", "2026-01-01T00:00:00Z", "conflicting")
++        self.write_legacy(conflicting)
++
++        conflict_result, conflict = self.migrate(check=False)
++
++        self.assertEqual(conflict_result.returncode, 2)
++        self.assertEqual(conflict["status"], "error")
++        self.assertEqual([(path.name, path.read_bytes()) for path in self.event_files()], before)
++
++    def test_should_export_all_events_for_old_reader_and_refuse_existing_output(self):
++        first = self.record("first")
++        second = self.record("second")
++        self.run_cli("retire", "--id", first["id"], "--reason", "fixed")
++        output = Path(self.temp.name) / "export.jsonl"
++
++        _, exported = self.export(output)
++        lines = output.read_text(encoding="utf-8").splitlines()
++        output_before = output.read_bytes()
++        overwrite_result, overwrite = self.export(output, check=False)
++
++        self.assertEqual(exported["events"], 3)
++        self.assertEqual(self.old_helper_active_ids(lines), [second["id"]])
++        self.assertEqual(
++            self.old_helper_active_ids(lines + [json.dumps({"type": "retire", "id": second["id"], "reason": "old helper", "ts": "2026-01-03T00:00:00Z"})]),
++            [],
++        )
++        self.assertEqual(overwrite_result.returncode, 2)
++        self.assertEqual(overwrite["status"], "error")
++        self.assertEqual(output.read_bytes(), output_before)
++
++    def test_should_keep_concurrent_duplicate_payload_to_one_active_event(self):
++        processes = []
++        payload = json.dumps(self.lesson("same"))
++        try:
++            for _ in range(6):
++                processes.append(
++                    subprocess.Popen(
++                        [sys.executable, str(CLI), "record", "--project", str(self.root)],
++                        stdin=subprocess.PIPE,
++                        stdout=subprocess.PIPE,
++                        stderr=subprocess.PIPE,
++                        text=True,
++                    )
++                )
++            for process in processes:
++                assert process.stdin is not None
++                process.stdin.write(payload)
++                process.stdin.close()
++            for process in processes:
++                process.wait(timeout=15)
++            results = [(process.stdout.read(), process.stderr.read()) for process in processes]
++        finally:
++            for process in processes:
++                if process.poll() is None:
++                    process.terminate()
++                process.wait(timeout=15)
++                if process.stdout is not None:
++                    process.stdout.close()
++                if process.stderr is not None:
++                    process.stderr.close()
++
++        for process, (_, stderr) in zip(processes, results):
++            self.assertEqual(process.returncode, 0, stderr)
++        responses = [json.loads(stdout) for stdout, _ in results]
++        self.assertEqual({response["id"] for response in responses}, {responses[0]["id"]})
++        self.assertEqual(len(self.recall(query="same")["records"]), 1)
++
++    def test_should_keep_old_append_visible_when_new_writer_waits_for_legacy_lock(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        ledger = docs / "learnings.jsonl"
++        legacy = self.event("old-append", "2026-01-01T00:00:00Z", "old append")
++        writer = subprocess.Popen(
++            [
++                sys.executable,
++                "-c",
++                "import fcntl,json,os,sys; p=sys.argv[1]; e=json.loads(sys.argv[2]); "
++                "f=open(p,'a',encoding='utf-8'); fcntl.flock(f,fcntl.LOCK_EX); print('locked',flush=True); "
++                "sys.stdin.read(1); f.write(json.dumps(e)+'\\n'); f.flush(); os.fsync(f.fileno()); fcntl.flock(f,fcntl.LOCK_UN); f.close()",
++                str(ledger),
++                json.dumps(legacy),
++            ],
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            stdin=subprocess.PIPE,
++            text=True,
++        )
++        new_writer = None
++        try:
++            assert writer.stdout is not None
++            self.assertEqual(writer.stdout.readline().strip(), "locked")
++            new_writer = subprocess.Popen(
++                [sys.executable, str(CLI), "record", "--project", str(self.root)],
++                stdin=subprocess.PIPE,
++                stdout=subprocess.PIPE,
++                stderr=subprocess.PIPE,
++                text=True,
++            )
++            assert new_writer.stdin is not None
++            new_writer.stdin.write(json.dumps(self.lesson("new writer")))
++            new_writer.stdin.close()
++            with self.assertRaises(subprocess.TimeoutExpired):
++                new_writer.wait(timeout=0.2)
++            assert writer.stdin is not None
++            writer.stdin.write("release")
++            writer.stdin.close()
++            writer.wait(timeout=15)
++            stdout, stderr = writer.stdout.read(), writer.stderr.read()
++            self.assertEqual(writer.returncode, 0, stderr + stdout)
++            new_writer.wait(timeout=15)
++            new_stdout, new_stderr = new_writer.stdout.read(), new_writer.stderr.read()
++            self.assertEqual(new_writer.returncode, 0, new_stderr + new_stdout)
++            recorded = json.loads(new_stdout)
++        finally:
++            if writer.poll() is None:
++                writer.terminate()
++            writer.wait(timeout=15)
++            if writer.stdout is not None:
++                writer.stdout.close()
++            if writer.stderr is not None:
++                writer.stderr.close()
++            if new_writer is not None:
++                if new_writer.poll() is None:
++                    new_writer.terminate()
++                new_writer.wait(timeout=15)
++                if new_writer.stdout is not None:
++                    new_writer.stdout.close()
++                if new_writer.stderr is not None:
++                    new_writer.stderr.close()
++
++        self.assertEqual({record["id"] for record in self.recall()["records"]}, {"old-append", recorded["id"]})
++
++    def test_should_merge_branch_event_files_and_recall_from_clone_and_worktree(self):
++        repository = Path(self.temp.name) / "repository"
++        repository.mkdir()
++        self.git(repository, "init", "-q")
++        self.git(repository, "config", "user.email", "acceptance@example.test")
++        self.git(repository, "config", "user.name", "Acceptance Test")
++        (repository / "README").write_text("seed\n", encoding="utf-8")
++        self.git(repository, "add", "README")
++        self.git(repository, "commit", "-qm", "seed")
++        initial_branch = self.git(repository, "branch", "--show-current").stdout.strip()
++        self.git(repository, "checkout", "-qb", "left")
++        left = self.record("left", root=repository)
++        self.git(repository, "add", "docs/learnings")
++        self.git(repository, "commit", "-qm", "left learning")
++        self.git(repository, "checkout", initial_branch)
++        self.git(repository, "checkout", "-qb", "right")
++        right = self.record("right", root=repository)
++        self.git(repository, "add", "docs/learnings")
++        self.git(repository, "commit", "-qm", "right learning")
++
++        merged = self.git(repository, "merge", "--no-edit", "left", check=False)
++        clone = Path(self.temp.name) / "clone"
++        subprocess.run(["git", "clone", "-q", str(repository), str(clone)], check=True, capture_output=True, text=True)
++        worktree = Path(self.temp.name) / "worktree"
++        self.git(repository, "worktree", "add", "-q", "-b", "reader", str(worktree), "HEAD")
++
++        self.assertEqual(merged.returncode, 0, merged.stderr + merged.stdout)
++        tracked = self.git(repository, "ls-files", "docs/learnings").stdout.splitlines()
++        self.assertNotIn("docs/learnings/.lock", tracked)
++        self.assertIn("docs/learnings/.gitignore", tracked)
++        self.assertEqual({record["id"] for record in self.recall(root=repository)["records"]}, {left["id"], right["id"]})
++        self.assertEqual({record["id"] for record in self.recall(root=clone)["records"]}, {left["id"], right["id"]})
++        self.assertEqual({record["id"] for record in self.recall(root=worktree)["records"]}, {left["id"], right["id"]})
++
++    def git(self, root, *args, check=True):
++        result = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=False)
++        if check:
++            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
++        return result
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/.agent-harness/scripts/tests/test_project_learning_storage.py
+@@ -0,0 +1,200 @@
++import fcntl
++import json
++import os
++import stat
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++SCRIPTS = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(SCRIPTS))
++from project_learning_events import event_filename
++from project_learning_export import export_jsonl
++from project_learning_lib import UserError, export_events, migrate_learnings
++from project_learning_lib import recall_learnings, record_learning, retire_learning
++from project_learning_storage import open_store, publish_event, read_event_files, read_legacy
++class ProjectLearningStorageTest(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name) / "project"
++        self.root.mkdir()
++    def tearDown(self):
++        self.temp.cleanup()
++    def event(self, identifier="one"):
++        return {
++            "type": "learning", "id": identifier, "ts": "2026-01-01T00:00:00Z", "trigger": "risk",
++            "condition": "condition", "failed_approach": "failed", "correction": "correction", "evidence": "evidence", "tags": [],
++        }
++    def test_publish_fsyncs_file_before_link_and_directory_after(self):
++        store = open_store(self.root, True, True, UserError)
++        assert store is not None
++        event, calls = self.event(), []
++        actual_fsync, actual_link = os.fsync, os.link
++        def fsync(descriptor):
++            calls.append("directory" if descriptor == store.events_fd else "file")
++            return actual_fsync(descriptor)
++        def link(*args, **kwargs):
++            calls.append("link")
++            return actual_link(*args, **kwargs)
++        try:
++            with patch("project_learning_publish.os.fsync", fsync), patch("project_learning_publish.os.link", link):
++                self.assertTrue(publish_event(store, event_filename(event), {"version": 1, "event": event}))
++        finally:
++            store.close()
++        self.assertEqual(calls, ["file", "link", "directory"])
++    def test_failed_publications_remove_temporary_files(self):
++        store = open_store(self.root, True, True, UserError)
++        assert store is not None
++        event = self.event()
++        try:
++            with patch("project_learning_publish.os.write", return_value=0):
++                with self.assertRaises(OSError):
++                    publish_event(store, event_filename(event), {"version": 1, "event": event})
++        finally:
++            store.close()
++        with patch("project_learning_export.os.fsync", side_effect=OSError("injected")):
++            with self.assertRaises(UserError):
++                export_jsonl(str(self.root / "export.jsonl"), [event], UserError)
++        self.assertFalse(list(self.root.glob(".tmp-project-learning-*")))
++        self.assertFalse(list((self.root / "docs" / "learnings").glob(".tmp-*")))
++        raw = {key: value for key, value in event.items() if key not in {"type", "id", "ts"}}
++        record_learning(self.root, raw)
++        raw["correction"] = "retry"
++        actual_fsync = os.fsync
++        def fail_directory(descriptor):
++            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
++                raise OSError("injected")
++            return actual_fsync(descriptor)
++        with patch("project_learning_publish.os.fsync", fail_directory):
++            with self.assertRaises(OSError):
++                record_learning(self.root, raw)
++        synced = []
++        def track_directory(descriptor):
++            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
++                synced.append(descriptor)
++            return actual_fsync(descriptor)
++        with patch("project_learning_lib.os.fsync", track_directory):
++            self.assertTrue(record_learning(self.root, raw)[0]["duplicate"])
++        self.assertTrue(synced)
++    def test_writer_creates_ignore_rules_and_reader_opens_lock_read_only(self):
++        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
++        writer = open_store(self.root, True, True, UserError)
++        assert writer is not None
++        try:
++            self.assertFalse((self.root / "docs" / "learnings" / ".gitignore").exists())
++            writer.lock(True)
++        finally:
++            writer.unlock()
++            writer.close()
++        writer = open_store(self.root, True, True, UserError)
++        assert writer is not None
++        try:
++            with patch("project_learning_storage.publish_bytes") as publish:
++                writer.lock(True)
++                publish.assert_not_called()
++        finally:
++            writer.unlock()
++            writer.close()
++        subprocess.run(["git", "add", "docs/learnings"], cwd=self.root, check=True)
++        tracked = subprocess.run(
++            ["git", "ls-files", "docs/learnings"], cwd=self.root, text=True, capture_output=True, check=True
++        ).stdout.splitlines()
++        reader = open_store(self.root, False, False, UserError)
++        assert reader is not None and reader.lock_fd is not None
++        try:
++            flags = fcntl.fcntl(reader.lock_fd, fcntl.F_GETFL)
++            self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
++        finally:
++            reader.close()
++        self.assertIn("docs/learnings/.gitignore", tracked)
++        self.assertNotIn("docs/learnings/.lock", tracked)
++    def test_reader_ignores_a_disappearing_writer_temporary_file(self):
++        events = self.root / "docs" / "learnings"
++        events.mkdir(parents=True)
++        store = open_store(self.root, False, False, UserError)
++        assert store is not None and store.lock_fd is None
++        try:
++            with patch("project_learning_storage.os.listdir", return_value=[".tmp-disappeared"]):
++                self.assertEqual(read_event_files(store, UserError), [])
++        finally:
++            store.close()
++    def test_migration_preserves_retire_extras_and_line_indexes(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        event = self.event()
++        retire = {"type": "retire", "id": "one", "reason": "fixed", "ts": event["ts"], "source": "legacy"}
++        broken = '{"broken":\n' + json.dumps(event) + "\n" + json.dumps(retire) + "\n"
++        docs.joinpath("learnings.jsonl").write_text(broken)
++        store = open_store(self.root, False, False, UserError)
++        assert store is not None
++        try:
++            rows, skipped = read_legacy(store, lambda item: isinstance(item, dict))
++        finally:
++            store.close()
++        self.assertEqual(([index for _, index in rows], skipped), ([1, 2], 1))
++        with self.assertRaises(UserError):
++            migrate_learnings(self.root)
++        docs.joinpath("learnings.jsonl").write_text(json.dumps(event) + "\n" + json.dumps(retire) + "\n")
++        migrate_learnings(self.root)
++        docs.joinpath("learnings.jsonl").unlink()
++        self.assertEqual(recall_learnings(self.root, "", 20)[0], [])
++        first = json.loads((docs / "learnings" / event_filename(event)).read_text())
++        self.assertEqual(first["legacy_index"], 0)
++        expanded = json.dumps(self.event(), separators=(",", ":"))[:-1] + ',"numbers":[' + ",".join(["1e9"] * 3000) + "]}"
++        docs.joinpath("learnings.jsonl").write_text(expanded + "\n")
++        before = [(path.name, path.read_bytes()) for path in (docs / "learnings").glob("*.json")]
++        with self.assertRaises(UserError):
++            migrate_learnings(self.root)
++        self.assertEqual([(path.name, path.read_bytes()) for path in (docs / "learnings").glob("*.json")], before)
++        output = self.root / "too-large.jsonl"
++        with self.assertRaises(UserError):
++            export_jsonl(str(output), export_events(self.root)[0], UserError)
++        self.assertFalse(output.exists())
++    def test_migration_resumes_after_one_event_file_is_missing(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        first, second = self.event("one"), self.event("two")
++        (docs / "learnings.jsonl").write_text("\n".join(json.dumps(item) for item in (first, second)) + "\n")
++        self.assertEqual(migrate_learnings(self.root)[0]["migrated"], 2)
++        (docs / "learnings" / event_filename(second)).unlink()
++        self.assertEqual(migrate_learnings(self.root)[0]["migrated"], 1)
++        self.assertEqual({item["id"] for item in recall_learnings(self.root, "", 20)[0]}, {"one", "two"})
++        large = self.event("large")
++        encoded = json.dumps(large, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
++        large["evidence"] = "x" * (32765 - len(encoded) + len("evidence"))
++        ledger = docs / "learnings.jsonl"
++        ledger.write_text(ledger.read_text() + json.dumps(large, ensure_ascii=False, separators=(",", ":")) + "\n")
++        self.assertEqual(migrate_learnings(self.root)[0]["migrated"], 1)
++        output = self.root / "large.jsonl"
++        export_jsonl(str(output), export_events(self.root)[0], UserError)
++        self.assertEqual(json.loads(output.read_text().splitlines()[-1]), large)
++        self.assertIn(large, recall_learnings(self.root, "", 20)[0])
++    def test_retire_creates_event_store_for_a_legacy_only_record(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        (docs / "learnings.jsonl").write_text(json.dumps(self.event()) + "\n", encoding="utf-8")
++        self.assertTrue(retire_learning(self.root, "one", "fixed")[0]["retired"])
++        self.assertEqual(recall_learnings(self.root, "", 20)[0], [])
++    def test_event_symlink_and_hash_mismatch_fail_closed(self):
++        docs = self.root / "docs"
++        docs.mkdir()
++        outside = Path(self.temp.name) / "outside"; outside.mkdir()
++        os.symlink(outside, docs / "learnings")
++        with self.assertRaises(UserError):
++            open_store(self.root, False, False, UserError)
++        (docs / "learnings").unlink()
++        events = docs / "learnings"
++        events.mkdir()
++        event = self.event()
++        (events / ("0" * 64 + ".json")).write_text(json.dumps({"version": 1, "event": event}), encoding="utf-8")
++        store = open_store(self.root, False, False, UserError)
++        assert store is not None
++        try:
++            with self.assertRaises(UserError):
++                read_event_files(store, UserError)
++        finally:
++            store.close()
++if __name__ == "__main__":
++    unittest.main()

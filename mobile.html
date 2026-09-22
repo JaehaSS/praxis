@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover: iOS 노치/홈 인디케이터 영역까지 쓰고 safe-area-inset으로 패딩한다. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0f14" />
+    <!-- iOS는 홈 화면에 추가해야 standalone으로 뜨고, 그 전에는 푸시 구독도 불가하다. (설계 0013 §8) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Praxis" />
+    <link rel="manifest" href="/m/manifest.webmanifest" />
+    <title>Praxis</title>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile/main.tsx"></script>
+  </body>
+</html>

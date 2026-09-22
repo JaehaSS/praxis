@@ -1,0 +1,8 @@
+{"query": "Spring Boot 멀티 포트 구성", "expect": ["서버/Spring Boot 멀티 포트 구성.md"]}
+{"query": "Spring Security JWT 인증 방법", "expect": ["서버/Spring Security JWT 인증과 OAuth2.md"]}
+{"query": "MetaData Lock", "expect": ["블로그/13_MetaData Lock.md"]}
+{"query": "컴퓨터 구조 정리", "expect": ["기초/01_computer_architecture.md", "기초/01_컴퓨터_구조.md"]}
+{"query": "vLLM 추론 서빙", "expect": ["study/2026/03/AI/deep/vLLM.md"]}
+{"query": "멀티 에이전트 아키텍처", "expect": ["study/2026/03/AI/deep/multi-agent-architecture.md", "study/2026/03/AI/deep/multi-agent-systems-enterprise.md"]}
+{"query": "Minikube 로컬 쿠버네티스", "expect": ["도구/Minikube.md"]}
+{"query": "플러터 FFI 네이티브 연동", "expect": ["플러터/FFI.md"]}

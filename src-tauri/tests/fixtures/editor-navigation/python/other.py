@@ -1,0 +1,2 @@
+def target() -> None:
+    pass

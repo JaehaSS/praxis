@@ -1,0 +1,26 @@
+# gitleaks 설정 — 공개 전/후 시크릿 점검용.
+#
+#   gitleaks git --log-opts="--all" .    # 히스토리
+#   gitleaks dir .                       # 작업 트리
+#
+# 허용 목록은 **좁게** 둔다. 경로와 값을 AND로 묶어, 같은 파일에 진짜 키가 들어오면 여전히 걸리게 한다.
+# 넓은 허용은 검사를 무력화한다 — 규칙 전체를 끄거나 디렉터리를 통째로 비우지 말 것.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "검증 증거 JSON의 SHA-256 파일 해시. 키 이름이 api/token으로 끝나 generic-api-key에 걸린다"
+condition = "AND"
+paths = ['''^docs/(reviews|plans/evidence)/.*\.json$''']
+regexes = ['''^[a-f0-9]{64}$''']
+
+[[allowlists]]
+description = "로컬 STT 서버(127.0.0.1:8765) runbook의 예시 토큰. 외부 서비스 자격증명이 아니다"
+regexes = ['''^praxis-local$''']
+
+[[allowlists]]
+description = "VaultMemoryPanel 단위 테스트의 고정 repo_key 픽스처"
+condition = "AND"
+paths = ['''VaultMemoryPanel\.test\.tsx$''']
+regexes = ['''^praxis-3f9a1c2e$''']

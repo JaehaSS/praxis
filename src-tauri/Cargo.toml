@@ -1,0 +1,72 @@
+[package]
+name = "praxis"
+version = "0.1.0"
+description = "Praxis — AI agent orchestration IDE"
+authors = ["sinjaeha"]
+edition = "2021"
+default-run = "praxis"
+
+[lib]
+name = "praxis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "unstable"] }
+tauri-plugin-opener = "2"
+trash = "5"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+portable-pty = "0.8"
+anyhow = "1"
+base64 = "0.22"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "json"] }
+tokio = { version = "1", features = ["sync", "rt", "time", "macros", "net", "process", "signal"] }
+axum = { version = "0.7", features = ["ws"] }
+async-trait = "0.1"
+# 모바일 세션·페어링 코드용 OS 난수.
+getrandom = "0.2"
+# Web Push VAPID(ES256) 서명 — 페이로드 암호화는 쓰지 않으므로 이것만 필요하다.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+# 모바일 PWA 번들(dist-mobile/)을 Runner 바이너리에 내장 — 배포는 바이너리 교체 1회.
+rust-embed = { version = "8", features = ["mime-guess"] }
+futures-util = "0.3"
+fastembed = "4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+cron = "0.12"
+# 음성 입력(Plan 0043) — 마이크 캡처와 인메모리 WAV 인코딩.
+# WKWebView 는 SpeechRecognition 을 지원하지 않아 캡처가 네이티브여야 한다.
+cpal = "0.15"
+hound = "3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+keyring-core = "1.0.0"
+fontdb = "=0.23.0"
+# .worktreeinclude 의 gitignore 문법 매칭 — ripgrep 이 쓰는 표준 구현.
+# git check-ignore 위임은 쓸 수 없다: 저장소 .gitignore 가 core.excludesFile 보다
+# 우선해 부정 패턴(!)이 무시된다.
+ignore = "0.4"
+fs2 = "0.4"
+parquet = { version = "60.0.0", default-features = false, features = ["snap", "zstd", "flate2", "flate2-rust_backend", "lz4", "brotli"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal", "resource"] }
+
+# 텔레그램 봇 토큰 등 시크릿 저장 — 현재 배포 플랫폼(macOS)의 OS 키체인만 지원.
+# 크로스플랫폼 확장 시 windows-native-keyring-store 등을 각 target cfg에 추가.
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { version = "1.1.0", default-features = false }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = "0.24"
+tower = { version = "0.5", features = ["util"] }

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Praxis Preview Workbench Fixture</title>
+<form id="fixture">
+  <label for="name">이름</label>
+  <input id="name" name="name" autocomplete="off">
+  <button type="submit">완료</button>
+</form>
+<p role="status" id="result">대기</p>
+<script>
+  document.querySelector('#fixture').addEventListener('submit', (event) => {
+    event.preventDefault();
+    document.querySelector('#result').textContent = `완료: ${document.querySelector('#name').value}`;
+    console.error('fixture_expected_error');
+  });
+</script>
+</html>

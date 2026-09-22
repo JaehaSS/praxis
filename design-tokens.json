@@ -1,0 +1,123 @@
+{
+  "$schema": "https://design-tokens.github.io/community-group/format/",
+  "$description": "Praxis design tokens (W3C DTCG). 수동 폴백 — design.md CLI 복구 시 export --format dtcg로 재생성.",
+  "color": {
+    "$type": "color",
+    "primary": { "$value": "#14b8a6", "$description": "CTA, focus ring, active tab, active nav" },
+    "primaryHover": { "$value": "#0d9488" },
+    "primaryActive": { "$value": "#0f766e" },
+    "primaryBright": { "$value": "#2dd4bf", "$description": "interactive icon, progress, link" },
+    "teal": {
+      "50": { "$value": "#f0fdfa" },
+      "100": { "$value": "#ccfbf1" },
+      "200": { "$value": "#99f6e4" },
+      "300": { "$value": "#5eead4" },
+      "400": { "$value": "#2dd4bf" },
+      "500": { "$value": "#14b8a6" },
+      "600": { "$value": "#0d9488" },
+      "700": { "$value": "#0f766e" },
+      "800": { "$value": "#115e59" },
+      "900": { "$value": "#134e4a" }
+    },
+    "neutral": {
+      "50": { "$value": "#fafafa" },
+      "100": { "$value": "#f4f4f5" },
+      "200": { "$value": "#e4e4e7" },
+      "300": { "$value": "#d4d4d8" },
+      "400": { "$value": "#a1a1aa" },
+      "500": { "$value": "#71717a" },
+      "600": { "$value": "#52525b" },
+      "700": { "$value": "#3f3f46" },
+      "800": { "$value": "#2a2a2a" },
+      "850": { "$value": "#1f1f1f" },
+      "900": { "$value": "#161616" },
+      "950": { "$value": "#0d0d0d" }
+    },
+    "background": { "$value": "#0d0d0d" },
+    "surface": { "$value": "#161616" },
+    "surfaceRaised": { "$value": "#1f1f1f" },
+    "border": { "$value": "#2a2a2a" },
+    "borderStrong": { "$value": "#3f3f46" },
+    "text": {
+      "primary": { "$value": "#f4f4f5" },
+      "secondary": { "$value": "#a1a1aa" },
+      "muted": { "$value": "#71717a" },
+      "inverse": { "$value": "#0d0d0d" },
+      "link": { "$value": "#2dd4bf" }
+    },
+    "status": {
+      "running":  { "bg": { "$value": "#0c1929" }, "border": { "$value": "#1d4ed8" }, "text": { "$value": "#60a5fa" } },
+      "awaiting": { "bg": { "$value": "#1c1407" }, "border": { "$value": "#b45309" }, "text": { "$value": "#fbbf24" } },
+      "done":     { "bg": { "$value": "#071a0f" }, "border": { "$value": "#15803d" }, "text": { "$value": "#4ade80" } },
+      "failed":   { "bg": { "$value": "#1a0a0a" }, "border": { "$value": "#b91c1c" }, "text": { "$value": "#f87171" } }
+    },
+    "role": {
+      "planner": { "$value": "#b7a47a", "$description": "Plan Board identity strip" },
+      "researcher": { "$value": "#64748b", "$description": "Explore Archive identity strip" },
+      "implementer": { "$value": "#14b8a6", "$description": "Build Pods identity strip" },
+      "tester": { "$value": "#b78aa5", "$description": "Test Bench identity strip" },
+      "reviewer": { "$value": "#8b7ad1", "$description": "Review Core identity strip" }
+    }
+  },
+  "fontFamily": {
+    "$type": "fontFamily",
+    "ui": { "$value": ["Inter Variable", "Inter", "-apple-system", "BlinkMacSystemFont", "sans-serif"] },
+    "code": { "$value": ["JetBrains Mono", "Fira Code", "ui-monospace", "monospace"] }
+  },
+  "fontSize": {
+    "$type": "dimension",
+    "xs": { "$value": "11px" },
+    "sm": { "$value": "12px" },
+    "base": { "$value": "13px" },
+    "md": { "$value": "14px" },
+    "lg": { "$value": "16px" },
+    "xl": { "$value": "20px" },
+    "2xl": { "$value": "24px" }
+  },
+  "fontWeight": {
+    "$type": "fontWeight",
+    "regular": { "$value": 400 },
+    "medium": { "$value": 500 },
+    "semibold": { "$value": 600 },
+    "bold": { "$value": 700 }
+  },
+  "lineHeight": {
+    "$type": "number",
+    "tight": { "$value": 1.25 },
+    "normal": { "$value": 1.5 },
+    "relaxed": { "$value": 1.625 },
+    "code": { "$value": 1.6 }
+  },
+  "spacing": {
+    "$type": "dimension",
+    "0": { "$value": "0px" },
+    "0.5": { "$value": "2px" },
+    "1": { "$value": "4px" },
+    "1.5": { "$value": "6px" },
+    "2": { "$value": "8px" },
+    "3": { "$value": "12px" },
+    "4": { "$value": "16px" },
+    "5": { "$value": "20px" },
+    "6": { "$value": "24px" },
+    "8": { "$value": "32px" },
+    "10": { "$value": "40px" },
+    "12": { "$value": "48px" },
+    "16": { "$value": "64px" }
+  },
+  "rounded": {
+    "$type": "dimension",
+    "none": { "$value": "0px" },
+    "sm": { "$value": "4px" },
+    "md": { "$value": "6px" },
+    "lg": { "$value": "8px" },
+    "xl": { "$value": "12px" },
+    "full": { "$value": "9999px" }
+  },
+  "shadow": {
+    "$type": "shadow",
+    "e1": { "$value": "0 1px 3px rgba(0,0,0,0.4)" },
+    "e2": { "$value": "0 4px 12px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)" },
+    "e3": { "$value": "0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)" },
+    "e4": { "$value": "0 16px 48px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06)" }
+  }
+}
