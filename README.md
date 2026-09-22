@@ -65,7 +65,10 @@
 
 ### 설치
 
-**아직 배포 자산이 없습니다.** 소스에서 빌드해 씁니다.
+macOS(Apple Silicon)는 [릴리스](https://github.com/JaehaSS/praxis/releases/latest)에서 dmg를 받습니다.
+Apple 서명·공증이 없어 **처음 열 때는 우클릭 → 열기**를 눌러야 합니다.
+
+그 밖의 환경은 소스에서 빌드해 씁니다.
 
 ```sh
 npm ci
@@ -90,7 +93,7 @@ npm run check       # 프런트(tsc·vitest) + Rust 테스트 + clippy
 | macOS 데스크톱 | 개발·빌드·사용이 이뤄지는 환경 |
 | Windows / Linux 데스크톱 | 코드 분기와 절차 문서는 있으나 **이 저장소에 빌드·검증 기록이 없습니다** |
 | 실행 위치 | **로컬 한 곳입니다.** 원격 Linux Runner로 실행하던 경로는 2026-09-19에 앱에서 제거됐습니다 |
-| 배포 자산 | 게시된 릴리스가 아직 없습니다. macOS(Apple Silicon) dmg는 만들어 두었습니다 |
+| 배포 자산 | macOS(Apple Silicon) dmg를 [릴리스](https://github.com/JaehaSS/praxis/releases/latest)로 게시했습니다. 다른 환경의 빌드 자산은 없습니다 |
 | 코드 서명 | Apple 서명·공증이 없습니다(adhoc 서명). 내려받아 처음 열 때 **우클릭 → 열기**가 필요합니다 |
 | 라이선스 | [MIT](LICENSE) |
 
