@@ -1,129 +1,132 @@
 # Praxis
 
-**한국어** · [English](README.en.md)
+**English** · [한국어](README.ko.md)
 
-**AI 코딩 에이전트를 여러 개 동시에 돌리고, 바뀐 내용을 직접 확인한 뒤 승인하는 데스크톱 IDE입니다.**
+**A desktop IDE for running several AI coding agents at once, then reviewing and approving what they changed.**
 
-에이전트에게 일을 시키는 것은 터미널에서도 할 수 있습니다. Praxis는 그다음 단계를 맡습니다.
-작업마다 **격리된 git worktree**를 만들고, 에이전트가 그 안에서만 파일을 고치게 하고, 작업이
-끝나면 diff를 보여 준 뒤 **승인할지 폐기할지 사람이 결정하게** 합니다. 승인하기 전까지 원본
-브랜치는 바뀌지 않습니다.
+You can already hand work to an agent from a terminal. Praxis takes over from there. It gives each
+task its own **isolated git worktree**, keeps the agent's edits inside it, shows you the diff when the
+agent finishes, and **leaves the decision to approve or discard with you**. Your original branch does
+not change until you approve.
 
-<!-- 스크린샷 자리: 홈 화면 1장 + 검토/diff 화면 1장. 아직 없음 — 캡처해서 docs/assets/에 넣고 여기 링크할 것. -->
+<!-- Screenshot slot: one home screen + one review/diff screen. Not captured yet. -->
 
 ```
-지시문  →  격리 worktree 생성  →  에이전트 실행  →  diff 검토  →  승인 또는 폐기
-           praxis/<작업명> 브랜치                     (부분 적용 가능)
+prompt  →  isolated worktree  →  agent runs  →  review diff  →  approve or discard
+           praxis/<task> branch                  (partial apply supported)
 ```
 
-## 무엇이 다른가
+## Why Praxis
 
-- **원본을 건드리지 않습니다.** 작업마다 `.praxis/worktrees/` 아래에 worktree와 전용 브랜치를
-  만듭니다. 폐기하면 worktree가 통째로 사라지고, 승인해야 커밋과 머지가 일어납니다.
-- **여러 작업을 한 번에 돌립니다.** 기본 8개(설정에서 1~64)를 각자의 worktree와 터미널 세션에서
-  병렬로 실행합니다.
-- **벤더를 섞어 씁니다.** Claude Code · Codex · Antigravity(Gemini)를 작업마다 고를 수 있고, 같은
-  지시문을 여러 에이전트에게 맡겨 결과를 비교하거나 서로의 결과를 리뷰하게 할 수 있습니다.
-- **승인 전에 확인할 것을 먼저 보여 줍니다.** 검토 바에 보호 경로 · 진행 중인 git 작업 · 예상
-  충돌 · 검증 결과가 나오고, 필요하면 **hunk 단위로 골라** 적용합니다. 적용이 실패하면
-  체크포인트로 되돌립니다.
-- **터미널에서 하던 작업을 이어받습니다.** 이미 돌고 있던 Claude Code 세션을 골라 새 작업으로
-  가져오므로 문맥을 다시 설명하지 않아도 됩니다. 같은 세션을 두 곳에서 동시에 열려고 하면 거절합니다.
-- **모든 것이 로컬에서 동작합니다.** 앱 · 저장소 · 메모리 파일 · 색인 DB가 전부 사용자의 기계에
-  있고, 별도의 서버 계정이 필요 없습니다.
+- **Your original branch stays untouched.** Every task gets a worktree and a dedicated branch under
+  `.praxis/worktrees/`. Discarding removes the whole worktree; commits and merges happen only on approval.
+- **Run many tasks at once.** Eight by default (configurable from 1 to 64), each in its own worktree
+  and terminal session.
+- **Mix vendors.** Pick Claude Code, Codex, or Antigravity (Gemini) per task. Send the same prompt to
+  several agents to compare results, or have them review each other's work.
+- **See what matters before you approve.** The review bar shows protected paths, in-progress git
+  operations, expected conflicts, and verification results. Apply only the **hunks you choose**; if
+  applying fails, Praxis rolls back to a checkpoint.
+- **Pick up where your terminal left off.** Adopt a Claude Code session that is already running and
+  continue it as a new task without re-explaining the context. Opening the same session in two places
+  at once is refused.
+- **Everything runs locally.** The app, repositories, memory files, and index database all live on
+  your machine. No server account is required.
 
-## 주요 기능
+## Features
 
-전체 목록은 [기능 카탈로그](docs/guide/features.md)에 있습니다.
+The full list is in the [feature catalog](docs/guide/features.md) (Korean).
 
-| 영역 | 기능 |
+| Area | Features |
 |---|---|
-| 작업 오케스트레이션 | worktree 격리 · 동시 실행 · 벤더 선택 · 직접 실행 모드 · 터미널 세션 이어받기 |
-| 대화 | 프롬프트 대기열 · 메인 대화와 동시에 도는 별도 질문 · 체크포인트 되감기 · 에이전트의 되묻기 |
-| 검토와 승인 | diff 뷰어 · hunk 부분 적용 · 라인 주석 · 벤더 리뷰 · 승인 준비도 · 충돌 해소 |
-| 검증 | build/test 게이트 · 목표 계약(보호 경로 강제) · 결정 원장(선택) |
-| 코드 | Monaco 에디터 · 정의/사용처 이동 · Quick Open · parquet 표 · IPython 콘솔 · 에이전트가 직접 조작하는 프리뷰 창 |
-| 지식 | 파일 기반 메모리 자동 주입 · Wiki(2D/3D 그래프 · 연결 근거 · 순위 검색) · 코드 Wiki 생성 · 대기 중 복습 퀴즈 |
-| 에이전트 환경 | 벤더 중립 `/스킬` · MCP · LSP 브리지 · 지시문 인터뷰 |
-| 모바일 · 기타 | 모바일 PWA와 Web Push · 음성 입력 · 테마 25종 |
+| Task orchestration | Worktree isolation · concurrent runs · vendor choice · direct-run mode · terminal session adoption |
+| Conversation | Prompt queue · side questions alongside the main thread · checkpoint rewind · agent follow-up questions |
+| Review and approval | Diff viewer · per-hunk apply · line comments · cross-vendor review · approval readiness · conflict resolution |
+| Verification | Build/test gates · goal contracts (protected paths enforced) · decision ledger (optional) |
+| Code | Monaco editor · go to definition/references · Quick Open · parquet tables · IPython console · preview window the agent can drive |
+| Knowledge | File-based memory injection · Wiki (2D/3D graph · link evidence · ranked search) · code wiki generation · review quizzes while you wait |
+| Agent environment | Vendor-neutral `/skills` · MCP · LSP bridge · prompt interview |
+| Mobile and more | Mobile PWA with Web Push · voice input · 25 themes |
 
-## 설치
+## Installation
 
-### 준비물
+### Prerequisites
 
-| 필요한 것 | 확인 방법 |
+| Requirement | How to check |
 |---|---|
-| git과 로컬에 clone한 저장소 | `git --version` |
-| 에이전트 CLI 하나 이상 | `claude --version` · `codex --version` · `agy --version` |
+| git and a locally cloned repository | `git --version` |
+| At least one agent CLI | `claude --version` · `codex --version` · `agy --version` |
 
-에이전트 CLI는 각자 로그인이나 API 키 설정을 마친 상태여야 합니다. **터미널에서 동작하지 않으면
-Praxis에서도 동작하지 않습니다.** Praxis가 CLI를 대신 설치하지는 않습니다.
+Each agent CLI must already be logged in or have its API key configured. **If it does not work in your
+terminal, it will not work in Praxis either.** Praxis does not install the CLIs for you.
 
 ### macOS (Apple Silicon)
 
-1. [릴리스 페이지](https://github.com/JaehaSS/praxis/releases/latest)에서 `Praxis_<버전>_aarch64.dmg`를 받습니다.
-2. dmg를 열고 `Praxis.app`을 `응용 프로그램` 폴더로 옮깁니다.
-3. 처음 열 때는 더블클릭하지 말고 **우클릭 → 열기**를 누른 뒤, 경고 창에서 다시 **열기**를 누릅니다.
+1. Download `Praxis_<version>_aarch64.dmg` from the [releases page](https://github.com/JaehaSS/praxis/releases/latest).
+2. Open the dmg and drag `Praxis.app` into `Applications`.
+3. The first time, do not double-click. **Right-click → Open**, then click **Open** again in the warning dialog.
 
-3번이 필요한 이유는 이 빌드에 Apple 코드 서명과 공증이 없기 때문입니다. 명령행에서는
-`xattr -dr com.apple.quarantine /Applications/Praxis.app`이 같은 일을 합니다. 받은 파일은
-릴리스에 함께 올린 `SHA256SUMS.txt`와 `shasum -a 256`으로 대조할 수 있습니다.
+Step 3 is needed because this build has no Apple code signature or notarization. From the command
+line, `xattr -dr com.apple.quarantine /Applications/Praxis.app` does the same thing. You can verify the
+download with `shasum -a 256` against the `SHA256SUMS.txt` attached to the release.
 
-### 소스에서 빌드
+### Build from source
 
-다른 환경이거나 서명 경고를 피하고 싶다면 직접 빌드합니다. 위의 준비물에 더해 다음이 필요합니다.
+Build it yourself on other platforms, or if you would rather avoid the signing warning. In addition to
+the prerequisites above, you need:
 
-| 필요한 것 | 비고 |
+| Requirement | Notes |
 |---|---|
-| Node.js 22 또는 24 | 25에서는 테스트가 실패할 수 있습니다 |
+| Node.js 22 or 24 | Tests may fail on 25 |
 | Rust stable + Clippy | |
-| [Tauri 사전 요구 사항](https://v2.tauri.app/start/prerequisites/) | OS별 시스템 라이브러리 |
+| [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) | Per-OS system libraries |
 
 ```sh
 npm ci
 npm run tauri build
 ```
 
-macOS에서는 `src-tauri/target/release/bundle/` 아래에 `macos/Praxis.app`과 `dmg/`가 생깁니다.
+On macOS this produces `macos/Praxis.app` and `dmg/` under `src-tauri/target/release/bundle/`.
 
-## 첫 작업
+## Your first task
 
-처음 쓴다면 [사용 가이드](docs/guide/README.md)를 따라가면 됩니다.
+The [user guide](docs/guide/README.md) walks you through it. The guides are currently written in Korean.
 
-- [시작하기](docs/guide/getting-started.md) — 준비물 확인부터 첫 작업 승인까지
-- [기능 카탈로그](docs/guide/features.md) — 어떤 기능이 있는지
-- [워크플로우 & FAQ](docs/guide/workflows-faq.md) — 자주 쓰는 작업 패턴과 문제 해결
+- [Getting started](docs/guide/getting-started.md) — from prerequisites to approving your first task
+- [Feature catalog](docs/guide/features.md) — what Praxis can do
+- [Workflows & FAQ](docs/guide/workflows-faq.md) — common patterns and troubleshooting
 
-## 지원 범위
+## Platform support
 
-| 항목 | 상태 |
+| Item | Status |
 |---|---|
-| macOS (Apple Silicon) | 개발 · 빌드 · 사용이 이뤄지는 환경이고, 릴리스로 dmg를 배포합니다 |
-| macOS (Intel) | 배포하는 빌드가 없습니다. 소스에서 빌드해야 합니다 |
-| Windows · Linux | 코드 분기와 절차 문서는 있으나 **빌드 · 검증 기록이 없습니다** |
-| 실행 위치 | 로컬 한 곳입니다. 원격 Linux Runner로 실행하던 경로는 2026-09-19에 제거했습니다 |
-| 자동 업데이트 | 없습니다. 새 버전은 릴리스 페이지에서 받습니다 |
+| macOS (Apple Silicon) | Where Praxis is developed, built, and used. Distributed as a dmg on the releases page |
+| macOS (Intel) | No prebuilt binary. Build from source |
+| Windows · Linux | Platform branches and procedure docs exist, but **there is no record of a build or verification** |
+| Where tasks run | Locally only. The remote Linux Runner path was removed on 2026-09-19 |
+| Auto-update | None. Download new versions from the releases page |
 
-알려진 제약은 [기능 카탈로그의 "범위 밖"](docs/guide/features.md#범위-밖--주의할-것)에 모아 두었습니다.
+Known limitations are collected under ["범위 밖" (out of scope)](docs/guide/features.md#범위-밖--주의할-것) in the feature catalog.
 
-## 개발
+## Development
 
-개발 중에는 `npm run tauri dev`가 유일한 진입점입니다. 프론트엔드를 따로 띄우는 스크립트는 없습니다.
+`npm run tauri dev` is the only development entry point. There is no separate script that serves the
+frontend on its own.
 
-CI는 없고 검사는 로컬에서 실행합니다.
+There is no CI; run checks locally.
 
 ```sh
-npm run check       # 프론트엔드(tsc · vitest) + Rust 테스트 + clippy
+npm run check       # frontend (tsc · vitest) + Rust tests + clippy
 ```
 
-## 더 읽을 것
+## Further reading
 
-[사용 가이드](docs/guide/README.md) · [docs/architecture.md](docs/architecture.md) ·
-[DESIGN.md](DESIGN.md)(디자인 시스템) · [THIRD-PARTY-ASSETS.md](THIRD-PARTY-ASSETS.md)
+[User guide](docs/guide/README.md) (Korean) · [docs/architecture.md](docs/architecture.md) ·
+[DESIGN.md](DESIGN.md) (design system) · [THIRD-PARTY-ASSETS.md](THIRD-PARTY-ASSETS.md)
 
-설계 기록 · 결정 기록 · 작업 원장은 이 저장소에 싣지 않았습니다. 여기 실린 문서가 그 기록을
-가리키던 곳은 링크 없이 제목만 남겨 두었습니다.
+Design notes, decision records, and the work ledger are not published in this repository. Where the
+documents here referred to them, the title is kept without a link.
 
-## 라이선스
+## License
 
-[MIT](LICENSE). 파일 타입 아이콘의 출처와 저작권 표시는 [THIRD-PARTY-ASSETS.md](THIRD-PARTY-ASSETS.md)에 있습니다.
+[MIT](LICENSE). Sources and copyright notices for the file-type icons are in [THIRD-PARTY-ASSETS.md](THIRD-PARTY-ASSETS.md).
